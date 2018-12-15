@@ -28,6 +28,15 @@ typedef struct server_cred
     char password[20];
 }server_cred;
 
+typedef struct
+{
+	char command[32];
+	char filename[32];
+	char subfolder[32];
+	char cred[128];
+	size_t file_size;
+	int file_part;
+}packet_t;
 
 /*-----------------------Global Variable-----------------------*/
 server_cred credential;
@@ -92,63 +101,97 @@ static int parse_ConfigFile(const char *filename)
     return 0;
 }
 
-/*void client_menu(int fd)
-{
-	char user_input[50];
-	char cmd_send[128];
-
-	printf("\n Menu \n Enter any of the following commands \n 1.) get [file_name] \n 2.) put [file_name] \n 3.) list \n 4.) exit \n");		
-	scanf(" %[^\n]%*c", cmd_send);
-
-	snprintf(cmd_send, 100, "%s %s %s", user_input, credential.u_name, credential.password);
-	if (send(fd, cmd_send, strlen(cmd_send), 0) < 0)
-		print_error("Client: send");
-
-	clear_buffer(cmd_send, credential);
-}*/
 
 int main(int argc, char **argv)
 {
-	struct sockaddr_in sock;
+	struct sockaddr_in sock[4];
+	packet_t packet;
 
 	char user_input[50], cmd_send[128];
 	char auth_resp[256];
-    int dfs1 = 0, option = 1;
+    int dfs[4]; 
+	int option = 1, auth_success = 0, i = 0;
     ssize_t length;
-
-	dfs1 = socket(AF_INET, SOCK_STREAM, 0);
-    if (dfs1 == -1)
-		print_error("Client: init_socket");
-
-    setsockopt(dfs1, SOL_SOCKET, SO_REUSEADDR, &option, sizeof(option));
 
 	if (parse_ConfigFile("dfc.conf") == -1)
 		print_error("Client: parse_ConfigFile");
 
-    memset(&sock, 0, sizeof(sock));
-    sock.sin_family = AF_INET;
-    sock.sin_addr.s_addr = inet_addr(server[0].ip);
-    sock.sin_port = htons(atoi(server[0].port));
+	for (i = 0; i < 4; i++) {
 
-	if (connect(dfs1, (struct sockaddr *)&sock, sizeof(sock)) < 0)
-		print_error("Client: connect");
+		memset(&sock[i], 0, sizeof(sock[i]));
+
+		dfs[i] = socket(AF_INET, SOCK_STREAM, 0);
+    	if (dfs[i] == -1)
+			print_error("Client: init_socket");
+
+    	setsockopt(dfs[i], SOL_SOCKET, SO_REUSEADDR, &option, sizeof(option));
+
+		sock[i].sin_family = AF_INET;
+    	sock[i].sin_addr.s_addr = inet_addr(server[i].ip);
+		sock[i].sin_port = htons(atoi(server[i].port));
+
+		if (connect(dfs[i], (struct sockaddr *)&sock[i], sizeof(sock[i])) < 0) {
+			close(dfs[i]);
+			dfs[i] = -1;
+		}
+	}
+
+	signal(SIGPIPE, SIG_IGN);
 
 	for (;;)
 	{
-		printf("\n Menu \n Enter any of the following commands \n 1.) get [file_name] \n 2.) put [file_name] \n 3.) list \n 4.) exit \n");
-    	scanf(" %[^\n]%*c", cmd_send);
+		clear_buffer(cmd_send, auth_resp, user_input);
+		if (!auth_success) {
 
-    	snprintf(cmd_send, 100, "%s %s %s", user_input, credential.u_name, credential.password);
-    	if (send(dfs1, cmd_send, strlen(cmd_send), 0) < 0)
-        	print_error("Client: send");
+			printf("Trying to connect to the server\n");		
+			snprintf(cmd_send, 128, "%s %s", credential.u_name, credential.password);
 
-		read(dfs1, auth_resp, sizeof(auth_resp));
-		printf("%s\n", auth_resp);
+			for (i = 0; i < 4; i++) {
+				if (send(dfs[i], cmd_send, strlen(cmd_send), 0) < 0)
+					print_error("Client: send");
 
-		clear_buffer(cmd_send, credential);
+				read(dfs[i], auth_resp, sizeof(auth_resp));
+			
+				if (strcmp(auth_resp, "Invalid Username/Password. Please try again") == 0) {
+					auth_success = 0;
+					memset(&auth_resp, 0, sizeof(auth_resp));
+					printf("Authentication Failed\n");
+					exit(1);
+					break;
+				}
+				else if (strcmp(auth_resp, "Authentication Success") == 0) {
+					auth_success = 1;
+					memset(&auth_resp, 0, sizeof(auth_resp));
+				}
+				else {
+					exit(1);
+				}
+			}
+
+			if (auth_success) {
+				printf("Authentication Success\n");
+			}
+        	clear_buffer(cmd_send, auth_resp);
+		}
+		else {
+
+			printf("\n Menu \n Enter any of the following commands \n 1.) get [file_name] \n 2.) put [file_name] \n 3.) list \n 4.) exit \n");
+    		scanf(" %[^\n]%*c", user_input);
+
+			for (i = 0; i < 4; i++) {
+    		if (send(dfs[i], user_input, strlen(user_input), 0) < 0) {
+				print_error("Client: send");
+			}
+			}
+
+			clear_buffer(cmd_send, user_input, auth_resp);
+		}
 	}
 
-	close(dfs1);
+	close(dfs[0]);
+	close(dfs[1]);
+	close(dfs[2]);
+	close(dfs[3]);
 
 	return 0;
 }

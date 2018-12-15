@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
 #include <unistd.h>
 #include <error.h>
 #include <time.h>
@@ -23,13 +24,22 @@ void print_error(char *msg);
 static int init_socket(struct sockaddr_in sock, char *ip, char *port);
 static void handleRequest(int cfd);
 static int parse_ConfigFile(const char *filename, char *username, char *password);
-
+static int log_in(int cfd);
 
 /*Function to print error message*/
 void print_error(char *msg)
 {
     perror(msg);
     exit(EXIT_FAILURE);
+}
+
+void clear_buffer(char *msg, ...)
+{
+    va_list va_args;
+    va_start(va_args, msg);
+    memset(msg, 0, sizeof(msg));
+    va_end(va_args);
+    fflush(stdout);
 }
 
 static int init_socket(struct sockaddr_in sock, char *ip, char *port)
@@ -64,36 +74,50 @@ static int init_socket(struct sockaddr_in sock, char *ip, char *port)
 static void handleRequest(int cfd)
 {
 	char buffer[BUFF_SIZE];
-	char cmd[10], flname[40], u_name[20], passkey[20];
-	char auth_error[] = "Invalid Username/Password. Please try again.";
-	char server_error[] = "Server failed to open the configuration file";
 	ssize_t numRead;
+	printf("Waiting for the client request\n");
+	clear_buffer(buffer);
 
 	while ((numRead = read(cfd, buffer, BUFF_SIZE)) > 0) {
 		printf("%s\n", buffer);
 
-		sscanf(buffer, "%s %s %s %s", cmd, flname, u_name, passkey);
-
-		if (parse_ConfigFile("dfs.conf", u_name, passkey) == -2) {
-
-			send(cfd, auth_error, strlen(auth_error), 0);
-
-		}
-		else if (parse_ConfigFile("dfs.conf", u_name, passkey) == 1) {
-
-			send(cfd, "Authentication Success", 22, 0);
-
-		}
-		else {
-
-			send(cfd, server_error, strlen(server_error), 0);
-
-		}
-		
+		clear_buffer(buffer);
 	}
 
 	if (numRead == -1) {
 		print_error("handleRequest: read");
+	}
+}
+
+
+static int log_in(int cfd)
+{
+	char buffer[BUFF_SIZE], server_msg[256];
+	char u_name[50], passkey[50];
+	int auth_success = 0;
+	ssize_t numRead;
+
+	clear_buffer(buffer, server_msg, u_name, passkey);
+
+	while (!auth_success)
+	{
+		numRead = read(cfd, buffer, BUFF_SIZE);
+		printf("%s\n", buffer);
+		sscanf(buffer, "%s %s", u_name, passkey);
+
+		if (parse_ConfigFile("dfs.conf", u_name, passkey) == 1) {
+			
+			snprintf(server_msg, 256, "%s", "Authentication Success");
+			send(cfd, server_msg, strlen(server_msg), 0);
+			auth_success = 1;
+			return 1;
+        }
+		else {
+
+			sprintf(server_msg, 256, "%s", "Invalid Username/Password. Please try again");
+			send(cfd, server_msg, strlen(server_msg), 0);
+			return -1;
+		}
 	}
 }
 
@@ -114,6 +138,7 @@ static int parse_ConfigFile(const char *filename, char *username, char *password
         {
             return 1;
 		}
+		clear_buffer(buffer, key, value);
     }
 
     return -2;
@@ -157,7 +182,10 @@ int main(int argc, char **argv)
 
 			case 0:
 				close(sfd);
-				handleRequest(cfd);
+				if (log_in(cfd) == 1) {
+					handleRequest(cfd);
+					//printf("Auth Success\n");
+				}
 				close(cfd);
 				exit(EXIT_SUCCESS);
 
