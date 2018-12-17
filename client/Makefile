@@ -1,6 +1,6 @@
 
 client: client.c
-	gcc -w -Wall -g -o client client.c
+	gcc client.c -lcrypto -lm -o client
 
 clean:
 	rm -f *.o client
