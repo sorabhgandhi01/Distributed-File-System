@@ -17,11 +17,8 @@
 #include <openssl/md5.h>
 
 #define MAXBUFSIZE 1024
-#define NUMSERVERS 4
-#define SERVERNAME 50
-#define LISTSIZE 4096
 #define MAXFILES 25
-
+#define s_key 1
 /*---------------Typedef and Structure definations-------------*/
 typedef struct server_config
 {
@@ -47,21 +44,6 @@ typedef struct
 	int frame;
 }packet_t;
 
-typedef struct
-{
-	int serv;
-	int t_file;
-	int t_folder;
-	char filename[128][32];
-	char file_part[128][2];
-	char subfolder[128][32];
-}list_t;
-
-typedef struct{
-		char packet_number[2];
-		long int packet_size[2];
-}get_t;
-
 
 struct files {
     int count;
@@ -74,10 +56,16 @@ server_config server[4];
 
 char file[128][32] = {0};
 char subfolder[128][32] = {0};
+char config_file[128];
+
+char user_name[128] = {0};
+char user_key[128] = {0};
+
 int part_flag[128][5] = {0};	
 int file_count = 0;
 int folder_count = 0;
 int dfs[4];
+
 
 /*Function to print error message*/
 void print_error(char *msg)
@@ -279,6 +267,14 @@ void receive_file(int sock, FILE *f) {
 	char *buf = (char *)malloc(file_size);
     nbytes = recv(sock, buf, file_size, 0);
         
+	if (nbytes > 0)
+	{
+		/*for (long int j = 0; j < nbytes; j++)
+        {
+            buf[j] ^= s_key;
+        }*/
+	}
+
 	fwrite(buf, 1, nbytes, f);
 
 	free(buf);
@@ -287,44 +283,38 @@ void receive_file(int sock, FILE *f) {
 }
 
 
-void new_get(int sock[], packet_t packet) {
+void get(int sock[], packet_t packet) {
     //char message[MAXBUFSIZE];
     char buffer[MAXBUFSIZE];
 	char file_name[32];
 	strcpy(file_name, packet.filename);
-
-    //snprintf(message, MAXBUFSIZE, "%s %s %d", "GET", path, 0);
-    
+    int count = 0;
     int fileparts[4] = {0,0,0,0};
     
-    int offlineServerCount =0;
     int completeFile = 1;
     FILE *f;
     
-    for(int i=0; i<4; i++) {
-        if(sock[i] == -1) {
-            offlineServerCount++;
-        }
-    }
-    //printf("offline: %d\n", offlineServerCount);
-    if(offlineServerCount>=3) {
-        completeFile = 0;
-    }
     if(completeFile) {
         int hash;
 
         for(int i = 0; i < 4; i++) {
             if(sock[i] != -1) {
-            send(sock[i], &packet, sizeof(packet), 0);
+            	send(sock[i], &packet, sizeof(packet), 0);
 			
-            if (recv(sock[i], &fileparts[i], sizeof(fileparts[i]), 0) < 0) {
-				printf("REcieved part number\n");
-			}
+            	if (recv(sock[i], &fileparts[i], sizeof(fileparts[i]), 0) < 0) {
+					printf("REcieved part number\n");
+				}
+				if((fileparts[i] == 0) || (fileparts[i] > 34) || (fileparts[i] < 12)) {
+					count++;
+				}
             }
             printf("fileparts: %d\n", fileparts[i]);
         }
         
-        if(fileparts[0] == 12 || fileparts[1] == 23 || fileparts[2] == 34 || fileparts[3] == 14) {
+		if (count > 2) {
+			hash = -1;
+		}
+        else if(fileparts[0] == 12 || fileparts[1] == 23 || fileparts[2] == 34 || fileparts[3] == 14) {
             hash = 0;
         }
         else if(fileparts[1] == 12 || fileparts[2] == 23 || fileparts[3] == 34 || fileparts[0] == 14) {
@@ -338,11 +328,11 @@ void new_get(int sock[], packet_t packet) {
         }
         printf("hash client: %d\n", hash);
 
-
+		if (hash >= 0) {
         switch(hash) {
             case 0:
                
-                if(sock[0] != -1 && sock[2] != -1) {
+                if((fileparts[0] == 12) && (fileparts[2] == 34)) {
                     //Parts 1 and 2
                     //printf("Writing in file\n");
 					int request = 1;
@@ -357,9 +347,12 @@ void new_get(int sock[], packet_t packet) {
                     receive_file(sock[2], f);
                     f = fopen(file_name, "ab");
                     receive_file(sock[2], f);
+
+					request = 0;
+					send(sock[1], &request, sizeof(int), 0);
+					send(sock[3], &request, sizeof(int), 0);
                 }
-				else {
-                if(sock[1] != -1 && sock[3] != -1) {
+				else if((fileparts[1] == 23) && (fileparts[3] == 14)) {
                     //Parts 1 and 2
                     //printf("Writing in file\n");
 					int request = 1;
@@ -374,12 +367,18 @@ void new_get(int sock[], packet_t packet) {
                     receive_file(sock[1], f);
                     f = fopen(file_name, "ab");
                     receive_file(sock[3], f);
+
+					request = 0;
+                    send(sock[0], &request, sizeof(int), 0);
+                    send(sock[2], &request, sizeof(int), 0);
                 }
+				else {
+					printf("File cannot be downloaded\n");
 				}
                 break;
             case 1:
                 
-                if(sock[0] != -1 && sock[2] != -1) {
+                if((fileparts[0] == 14) && (fileparts[2] == 23)) {
                     //Parts 1 and 2
                     printf("Writing in file from case 1 of if\n");
 					int request = 1;
@@ -394,9 +393,12 @@ void new_get(int sock[], packet_t packet) {
                     receive_file(sock[2], f);
                     f = fopen(file_name, "ab");
                     receive_file(sock[0], f);
+
+					request = 0;
+                    send(sock[1], &request, sizeof(int), 0);
+                    send(sock[3], &request, sizeof(int), 0);
                 }
-                else {
-					if (sock[1] != -1 && sock[3] != -1) {
+                else if ((fileparts[1] == 12) && (fileparts[3] == 34)) {
                     //Parts 1 and 2
                     printf("Writing in file from case 2 of else\n");
 					int request = 1;
@@ -411,13 +413,19 @@ void new_get(int sock[], packet_t packet) {
                     receive_file(sock[1], f);
                     f = fopen(file_name, "ab");
                     receive_file(sock[3], f);
+
+					request = 0;
+                    send(sock[0], &request, sizeof(int), 0);
+                    send(sock[2], &request, sizeof(int), 0);
                 }
+				else {
+					printf("File cannot be downloaded\n");
 				}
                 break;
             
             case 2:
                 
-                if(sock[0] != -1 && sock[2] != -1) {
+                if ((fileparts[0] == 34) && (fileparts[2] == 12)) {
                     //Parts 1 and 2
                     //printf("Writing in file\n");
 					int request = 1;
@@ -432,9 +440,12 @@ void new_get(int sock[], packet_t packet) {
                     receive_file(sock[0], f);
                     f = fopen(file_name, "ab");
                     receive_file(sock[0], f);
+
+					request = 0;
+                    send(sock[1], &request, sizeof(int), 0);
+                    send(sock[3], &request, sizeof(int), 0);
                 }
-				else {
-                if(sock[1] != -1 && sock[3] != -1) {
+				else if((fileparts[1] == 14) && (fileparts[3] == 23)) {
                     //Parts 1 and 2
 					int request = 1;
                     send(sock[1], &request, sizeof(int), 0);
@@ -448,13 +459,19 @@ void new_get(int sock[], packet_t packet) {
                     receive_file(sock[3], f);
                     f = fopen(file_name, "ab");
                     receive_file(sock[1], f);
+
+					request = 0;
+                    send(sock[0], &request, sizeof(int), 0);
+                    send(sock[2], &request, sizeof(int), 0);
                 }
+				else {
+					printf("File cannot be downloaded\n");
 				}
                 break;
             
             case 3:
                 // (2,3) (3,4) (4,1) (1,2)
-                if(sock[0] != -1 && sock[2] != -1) {
+                if ((fileparts[0] == 23) && (fileparts[2] == 14)) {
                     //Parts 1 and 2
 					int request = 1;
                     send(sock[2], &request, sizeof(int), 0);
@@ -470,10 +487,12 @@ void new_get(int sock[], packet_t packet) {
                     receive_file(sock[2], f);
                     f = fopen(file_name, "rb");
                     fgets(buffer, MAXBUFSIZE, f);
-                    printf("Buffer: %s\n", buffer);
+                    //printf("Buffer: %s\n", buffer);
+					request = 0;
+                    send(sock[1], &request, sizeof(int), 0);
+                    send(sock[3], &request, sizeof(int), 0);
                 }
-				else {
-                if(sock[1] != -1 && sock[3] != -1) {
+				else if ((fileparts[1] == 34) && (fileparts[3] != 12)) {
                     //Parts 1 and 2
 					int request = 1;
                     send(sock[3], &request, sizeof(int), 0);
@@ -489,24 +508,67 @@ void new_get(int sock[], packet_t packet) {
                     receive_file(sock[1], f);
                     f = fopen(file_name, "rb");
                     fgets(buffer, MAXBUFSIZE, f);
-                    printf("Buffer: %s\n", buffer);
+                    //printf("Buffer: %s\n", buffer);
+	
+					request = 0;
+                    send(sock[0], &request, sizeof(int), 0);
+                    send(sock[2], &request, sizeof(int), 0);
                 }
+				else {
+					printf("File cannot be downloaded\n");
 				}
                 break;
         }
+		}
+		else {
+			printf("File is incomplete, cannot be downloaded from server.\n");
+		}
     }
     else {
         printf("File is incomplete, cannot be downloaded from server.\n");
     }
 }
 
+int log_in()
+{
+	char cmd_send[256] = {0};
+	char auth_resp[256] = {0};
+	int i = 0;
+
+	if (parse_ConfigFile(config_file) == -1)
+        print_error("Client: parse_ConfigFile");
+
+	snprintf(cmd_send, 128, "%s %s", credential.u_name, credential.password);
+
+	for (i = 0; i < 4; i++) {
+		if (send(dfs[i], cmd_send, strlen(cmd_send), 0) < 0)
+			print_error("Client: send");
+
+		read(dfs[i], auth_resp, sizeof(auth_resp));
+
+		if (strcmp(auth_resp, "Invalid Username/Password. Please try again") == 0) {
+			memset(&auth_resp, 0, sizeof(auth_resp));
+			printf("Authentication Failed\n");
+			
+			return -1;
+		}
+		else if (strcmp(auth_resp, "Authentication Success") == 0) {
+			memset(&auth_resp, 0, sizeof(auth_resp));
+		}
+		else {
+			return -1;
+		}
+	}
+	memset(cmd_send, 0, sizeof(cmd_send));
+	return 1;
+}
 
 int main(int argc, char **argv)
 {
-	if ((argc < 2) || (argc > 2)) {
-        printf("Usage --> ./[%s] [Configuration File]\n", argv[0]);    //Should have a port number > 5000
-        exit(EXIT_FAILURE);
-    }
+if ((argc < 2) || (argc > 2)) {
+	printf("Usage --> ./[%s] [Configuration File]\n", argv[0]);    //Should have a port number > 5000
+	exit(EXIT_FAILURE);
+}
 
 	struct sockaddr_in sock[4];
 	struct stat st;
@@ -527,8 +589,13 @@ int main(int argc, char **argv)
 	int option = 1, auth_success = 0, i = 0, msg_accepted = 0;
     ssize_t length;
 
-	if (parse_ConfigFile(argv[1]) == -1)
+	strcpy(config_file, argv[1]);
+
+	if (parse_ConfigFile(config_file) == -1)
 		print_error("Client: parse_ConfigFile");
+	
+	strcpy(user_name, credential.u_name);
+	strcpy(user_key, credential.password);
 
 	for (i = 0; i < 4; i++) {
 
@@ -555,8 +622,7 @@ int main(int argc, char **argv)
 	for (;;)
 	{
 		clear_buffer(cmd_send, auth_resp, user_input, subdir);
-		memset(&packet, 0, sizeof(packet));
-		memset(&fileList, 0, sizeof(fileList));
+		
 		if (!auth_success) {
 
 			printf("Trying to connect to the server\n");		
@@ -583,6 +649,7 @@ int main(int argc, char **argv)
 					exit(1);
 				}
 			}
+			//auth_success = log_in();
 
 			if (auth_success) {
 				printf("Authentication Success\n");
@@ -590,11 +657,18 @@ int main(int argc, char **argv)
         	clear_buffer(cmd_send, auth_resp);
 		}
 		else {
-
+			memset(&packet, 0, sizeof(packet));
+			memset(&fileList, 0, sizeof(fileList));
+			memset(user_input, 0, sizeof(user_input));
+			memset(subdir, 0, sizeof(subdir));
+			//memset(path, 0, sizeof(path));
+			//memset(mkdir_path, 0, sizeof(mkdir_path));
 			printf("\n Menu \n Enter any of the following commands \n 1.) get [file_name] \n 2.) put [file_name] \n 3.) list \n 4.) exit \n");
     		scanf(" %[^\n]%*c", user_input);
 
 			sscanf(user_input, "%s %s %s", packet.command, packet.filename, subdir);
+			printf("User Input = %s\n", user_input);
+			printf("Packet = %s %s %s\n", packet.command, packet.filename, subdir);
 			snprintf(packet.cred, 128, "%s %s", credential.u_name, credential.password);
 
 			if (strcmp(packet.command, "list") == 0 || strcmp(packet.command, "mkdir") == 0)
@@ -615,6 +689,11 @@ int main(int argc, char **argv)
 
 			if (((strcmp(packet.command, "put")) == 0) && (*(packet.filename) != '\0'))
 			{
+				if (parse_ConfigFile(config_file) == -1)
+        			print_error("Client: parse_ConfigFile");
+
+				if((strcmp(user_name, credential.u_name) == 0) && (strcmp(user_key, credential.password) == 0)) {
+				printf("Authentication Success\n");
 				printf("Command --> %s	%s\n", packet.command, packet.filename);
 				fptr = fopen(packet.filename, "rb");
 				if (fptr == NULL) {
@@ -647,6 +726,11 @@ int main(int argc, char **argv)
 						fread(buf, 1, packet.file_size, fptr);
 						printf("\n\nSending %d part of file of Size	- %ld\n", (packet.file_part + 1), packet.file_size);
 
+						/*for (long int j = 0; j < packet.file_size; j++)
+        				{
+           					 buf[j] ^= s_key;
+        				}*/
+
 						int j = 0;
 						for (j = 0; j < 2; j++)
 						{
@@ -673,6 +757,7 @@ int main(int argc, char **argv)
                             	timeout.tv_usec = 0;
                             	setsockopt(dfs[packet_part[md5][packet.file_part][j]], SOL_SOCKET, SO_RCVTIMEO, (const char *)&timeout, sizeof(struct timeval)); //Set timeout option for recv 
 								//printf("Message Accepted while sending the buffer = %d\n", msg_accepted);
+								
 							}
 							else {
                                 printf("Server not in a working status. Please try again\n");
@@ -681,23 +766,55 @@ int main(int argc, char **argv)
 						}
 						free(buf);
 					}
-					printf("File sent\n");
+				}
+				}
+				else{
+					printf("Authentication Failed\n");
 				}
 			}//put_end
 			else if (((strcmp(packet.command, "get")) == 0) && (*(packet.filename) != '\0'))
 			{
-				new_get(dfs, packet);
+				if (parse_ConfigFile(config_file) == -1)
+					print_error("Client: parse_ConfigFile");
+
+                if((strcmp(user_name, credential.u_name) == 0) && (strcmp(user_key, credential.password) == 0)) {
+                	printf("Authentication Success\n");
+					get(dfs, packet);
+				}
+				else {
+					printf("Authentication Failed\n");
+				}
 			}
 			else if (((strcmp(packet.command, "list")) == 0))
 			{
-				list(dfs, &fileList, packet);
+				
+				if (parse_ConfigFile(config_file) == -1)
+                    print_error("Client: parse_ConfigFile");
+
+                if((strcmp(user_name, credential.u_name) == 0) && (strcmp(user_key, credential.password) == 0)) {
+                    printf("Authentication Success\n");
+                    list(dfs, &fileList, packet);
+                }
+                else {
+                    printf("Authentication Failed\n");
+                }
 			}
 			else if (((strcmp(packet.command, "mkdir")) == 0))
 			{
-
+				int i = 0;
+				for (i = 0; i < 4; i++)
+				{
+					send(dfs[i], &packet, sizeof(packet), 0);
+				}
 			}
 			else if (((strcmp(packet.command, "exit")) == 0))
 			{
+				int i = 0;
+                for (i = 0; i < 4; i++)
+                {
+                    send(dfs[i], &packet, sizeof(packet), 0);
+                }
+
 				close(dfs[0]);
     			close(dfs[1]);
     			close(dfs[2]);

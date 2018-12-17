@@ -20,6 +20,7 @@
 #define MAX_Q 10
 #define BUFF_SIZE 4096
 #define MAXBUFSIZE 1024
+#define s_key 1
 
 typedef struct
 {
@@ -31,23 +32,8 @@ typedef struct
 	int file_part;
 }packet_t;
 
-typedef struct
-{
-    int serv;
-    int t_file;
-    int t_folder;
-    char filename[128][32];
-    char file_part[128][2];
-    char subfolder[128][32];
-}list_t;
-
-typedef struct{
-	char packet_number[2];
-	long int packet_size[2];
-}get_t;
 
 
-//list_t list = {0};
 int file_counter=-1;
 /*--------------------------Local function Prototype------------------------*/
 void print_error(char *msg);
@@ -124,18 +110,15 @@ static void handleRequest(int cfd, char *arg)
 		memset(mkdir_path, 0, sizeof(mkdir_path));
 		memset(path, 0, sizeof(path));
 
+		printf("New Packet --> %s	%s	%s \n", packet.command, packet.cred, packet.subfolder);
+
 		msg_recv = 1;
-		if (strcmp(packet.command, "get") != 0) {
+		if ((strcmp(packet.command, "list") == 0) || (strcmp(packet.command, "put") == 0)) {
 			send(cfd, &msg_recv, sizeof(int), 0);
 		}
 
 		sscanf(packet.cred, "%s %s", u_name, passkey);
 		sprintf(path, "%s/%s", arg, u_name);
-		/*printf("Path	-->	%s\n", path);
-		if (stat(path, &st) == -1) {
-			system(mkdir_path);
-			printf("New Folder Created -->	%s\n", mkdir_path);
-		}*/
 
 		snprintf(subpath, 256, "%s/%s/%s", arg, u_name, packet.subfolder);
 		printf("subpath	-->	%s\n", subpath);
@@ -171,6 +154,10 @@ static void handleRequest(int cfd, char *arg)
 				if((numRead = recv(cfd, recv_buf, packet.file_size, 0)) > 0)
 				{
 					total_bytes += numRead;
+					/*for (long int j = 0; j < numRead; j++)
+					{
+						recv_buf[j] ^= s_key;
+					}*/
 					fwrite(recv_buf, 1, numRead, fptr);
 					printf("Recieved --> %ld bytes of data\n", numRead);
 					msg_recv = 1;
@@ -184,6 +171,7 @@ static void handleRequest(int cfd, char *arg)
 			timeout.tv_sec = 0;
 			timeout.tv_usec = 0;
 			setsockopt(cfd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout,	sizeof(struct timeval));
+			
 		}
 		else if (((strcmp(packet.command, "get")) == 0) && (*(packet.filename) != '\0'))
         {
@@ -191,30 +179,38 @@ static void handleRequest(int cfd, char *arg)
             timeout.tv_usec = 0;
             setsockopt(cfd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(struct timeval));
 			new_get(cfd, subpath, packet.filename);
+			
 		}
       	else if (((strcmp(packet.command, "list")) == 0))
         {
 			printf("List called\n");
 			list(cfd, subpath);
+		
 		}
 		else if (((strcmp(packet.command, "mkdir")) == 0))
         {
-
+			if (stat(subpath, &st) == -1) {
+                system(mkdir_path);
+                printf("New Folder Created -->  %s\n", mkdir_path);
+            }
+			
 		}
 		else if (((strcmp(packet.command, "exit")) == 0))
 		{
 			close(cfd);
 			exit(0);
+			
 		}
 		else {
                 printf("Invalid Command\n");
+
 		}
 		
 		memset(u_name, 0, sizeof(u_name));
 		memset(passkey, 0, sizeof(passkey));
 		memset(subpath, 0, sizeof(subpath));
 		memset(mkdir_path, 0, sizeof(mkdir_path));
-		memset(path, 0, sizeof(path);
+		memset(path, 0, sizeof(path));
 		memset(&packet, 0, sizeof(packet));
 	}
 	if (numRead == -1) {
@@ -289,6 +285,10 @@ void new_get(int sock, char *path, char *file_name) {
     char return_message[MAXBUFSIZE];
     char server_path[MAXBUFSIZE];
     char buffer[MAXBUFSIZE];
+	struct timeval t_out = {1, 0};
+	int i = 0;
+
+	//setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&t_out, sizeof(struct timeval));
 
 	if((path[strlen(path)-1]) != '/' && strlen(path)) {
 		path[strlen(path)] = '/';
@@ -296,7 +296,7 @@ void new_get(int sock, char *path, char *file_name) {
 	
     snprintf(server_path, MAXBUFSIZE, "%s%s.", path, file_name);
 
-    int i = 0;
+    
     int file_part = 0;
     for(i = 1; i <= 4; i++) {
         sprintf(buffer, "%s%d", server_path, i);
@@ -334,6 +334,10 @@ void new_get(int sock, char *path, char *file_name) {
         
 		char *buf = (char *)malloc(file_size);
 		fread(buf, 1, file_size, f);
+		/*for (long int j = 0; j < file_size; j++)
+        {
+        	buf[j] ^= s_key;
+        }*/
         nbytes = send(sock, buf, file_size, 0);
 			//printf("%s\n", buf);
         if(nbytes == -1) {
@@ -362,10 +366,13 @@ void new_get(int sock, char *path, char *file_name) {
         rewind(f);
         send(sock, &f_size, sizeof(f_size), 0);
 		//printf("File Size = %ld\n", f_size);
-        
 		char *buf = (char *)malloc(f_size);
        
 		fread(buf, 1, f_size, f);
+		/*for (long int j = 0; j < f_size; j++)
+        {
+            buf[j] ^= s_key;
+        }*/
         nbytes = send(sock, buf, f_size, 0);
         if(nbytes == -1) {
 			printf("Error sending file\n");
@@ -388,8 +395,10 @@ void list(int sock, char *path) {
     FILE *f;
     int nbytes;
     char ls[MAXBUFSIZE];
-    snprintf(ls, MAXBUFSIZE, "ls -a %s", path);
-    
+   // snprintf(ls, MAXBUFSIZE, "find %s -type f -exec basename {} \\;", path);
+	snprintf(ls, MAXBUFSIZE, "ls -a %s", path);
+	printf("ls == %s\n", ls);    
+
     f = popen(ls, "r");
     char buf[MAXBUFSIZE];
     while(fgets(buf, sizeof(buf), f) != 0) {
